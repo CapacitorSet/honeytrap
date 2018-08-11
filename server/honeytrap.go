@@ -71,7 +71,7 @@ import (
 	_ "github.com/honeytrap/honeytrap/services/vnc"
 
 	"github.com/honeytrap/honeytrap/listener"
-	_ "github.com/honeytrap/honeytrap/listener/agent"
+	"github.com/honeytrap/honeytrap/listener/agent"
 	_ "github.com/honeytrap/honeytrap/listener/canary"
 	_ "github.com/honeytrap/honeytrap/listener/netstack"
 	_ "github.com/honeytrap/honeytrap/listener/netstack-experimental"
@@ -146,11 +146,6 @@ func New(options ...OptionFn) (*Honeytrap, error) {
 	return h, nil
 }
 
-func (hc *Honeytrap) startAgentServer() {
-	// as := proxies.NewAgentServer(hc.director, hc.pusher, hc.configig)
-	// go as.ListenAndServe()
-}
-
 // EventServiceStarted will return a service started Event struct
 func EventServiceStarted(service string) event.Event {
 	return event.New(
@@ -158,10 +153,6 @@ func EventServiceStarted(service string) event.Event {
 		event.ServiceSensor,
 		event.ServiceStarted,
 	)
-}
-
-// PrepareRun will prepare Honeytrap to run
-func (hc *Honeytrap) PrepareRun() {
 }
 
 // Wraps a Servicer, adding some metadata
@@ -532,6 +523,7 @@ func (hc *Honeytrap) Run(ctx context.Context) {
 			Port     string   `toml:"port"`
 			Ports    []string `toml:"ports"`
 			Services []string `toml:"services"`
+			Agents   []string `toml:"agents"`
 		}{}
 
 		if err := hc.config.PrimitiveDecode(s, &x); err != nil {
@@ -601,12 +593,18 @@ func (hc *Honeytrap) Run(ctx context.Context) {
 				continue
 			}
 
-			a, ok := l.(listener.AddAddresser)
-			if !ok {
+			if al, ok := l.(*agent.Listener); ok {
+				fmt.Printf("%#v %#v\n", addr, x.Agents)
+				al.AddAddress(addr, x.Agents)
+			} else if a, ok := l.(listener.AddAddresser); ok {
+				a.AddAddress(addr)
+				if x.Agents != nil {
+					log.Warning("The current listener does not supports the 'agents' directive")
+				}
+			} else {
 				log.Error("Listener error")
 				continue
 			}
-			a.AddAddress(addr)
 
 			log.Infof("Configured port %s/%s", addr.Network(), addr.String())
 		}

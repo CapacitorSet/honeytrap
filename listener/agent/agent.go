@@ -53,11 +53,16 @@ var (
 	_ = listener.Register("agent", New)
 )
 
-type agentListener struct {
+type addr struct {
+	net.Addr
+	agents []string
+}
+
+type Listener struct {
 	agentConfig
 
 	ch        chan net.Conn
-	Addresses []net.Addr
+	Addresses []addr
 
 	net.Listener
 }
@@ -66,16 +71,17 @@ type agentConfig struct {
 	Listen string `toml:"listen"`
 }
 
-// AddAddress will add the addresses to listen to
-func (al *agentListener) AddAddress(a net.Addr) {
-	al.Addresses = append(al.Addresses, a)
+// AddAddress will add the addresses to listen to. If agents is not nil, the
+// address only applies to those agents.
+func (al *Listener) AddAddress(a net.Addr, agents []string) {
+	al.Addresses = append(al.Addresses, addr{a, agents})
 }
 
 // New will initialize the agent listener
 func New(options ...func(listener.Listener) error) (listener.Listener, error) {
 	ch := make(chan net.Conn)
 
-	l := agentListener{
+	l := Listener{
 		agentConfig: agentConfig{},
 		ch:          ch,
 	}
@@ -87,7 +93,7 @@ func New(options ...func(listener.Listener) error) (listener.Listener, error) {
 	return &l, nil
 }
 
-func (al *agentListener) serv(c *conn2) {
+func (al *Listener) serv(c *conn2) {
 	defer func() {
 		if err := recover(); err != nil {
 			trace := make([]byte, 1024)
@@ -114,15 +120,30 @@ func (al *agentListener) serv(c *conn2) {
 		return
 	}
 
+	name := h.Name
+	protocol := h.ProtocolVersion
 	version := h.Version
 	shortCommitID := h.ShortCommitID
 	token := h.Token
 
-	log.Infof(color.YellowString("Agent connected (version=%s, commitid=%s, token=%s)...", version, shortCommitID, token))
+	log.Infof(color.YellowString("Agent %s connected (proto=%d, version=%s, commitid=%s, token=%s)", name, protocol, version, shortCommitID, token))
 	defer log.Infof(color.YellowString("Agent disconnected"))
 
+	var addresses []net.Addr
+	for _, address := range al.Addresses {
+		if address.agents == nil {
+			addresses = append(addresses, address.Addr)
+			continue
+		}
+		for _, name := range address.agents {
+			if name == h.Name {
+				addresses = append(addresses, address.Addr)
+				break
+			}
+		}
+	}
 	c.send(HandshakeResponse{
-		al.Addresses,
+		addresses,
 	})
 
 	out := make(chan interface{})
@@ -137,7 +158,7 @@ func (al *agentListener) serv(c *conn2) {
 
 		go func() {
 			// drain
-			for _ = range out {
+			for range out {
 			}
 		}()
 
@@ -229,7 +250,7 @@ func (al *agentListener) serv(c *conn2) {
 }
 
 // Start the listener
-func (al *agentListener) Start(ctx context.Context) error {
+func (al *Listener) Start(ctx context.Context) error {
 	storage, err := Storage()
 	if err != nil {
 		return err
@@ -276,7 +297,7 @@ func (al *agentListener) Start(ctx context.Context) error {
 }
 
 // Accept a new connection
-func (al *agentListener) Accept() (net.Conn, error) {
+func (al *Listener) Accept() (net.Conn, error) {
 	c := <-al.ch
 	return c, nil
 }
